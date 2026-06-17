@@ -1,0 +1,34 @@
+[project]
+name = "equity-research-platform"
+version = "0.1.0"
+description = "Equity research platform — Phase 0 spine (immutable research ledger, hexagonal)"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "pydantic>=2.7",
+    "sqlalchemy>=2.0.30",
+    "alembic>=1.13",
+    "psycopg[binary]>=3.1",
+    "structlog>=24.1",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.2",
+    "import-linter>=2.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/research_platform"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "db: tests that require a live PostgreSQL (docker-compose). Deselect with -m 'not db'.",
+]
+
+# import-linter reads .importlinter at the repo root (see that file).

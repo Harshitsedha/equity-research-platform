@@ -1,0 +1,21 @@
+services:
+  db:
+    image: postgres:16
+    container_name: erp_postgres
+    environment:
+      POSTGRES_USER: research
+      POSTGRES_PASSWORD: research
+      POSTGRES_DB: research
+    # Host port 5434 to avoid colliding with any native PostgreSQL on 5432.
+    ports:
+      - "5434:5432"
+    volumes:
+      - erp_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U research -d research"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  erp_pgdata:

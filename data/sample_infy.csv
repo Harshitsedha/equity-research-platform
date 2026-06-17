@@ -1,0 +1,16 @@
+key,value
+ticker,INFY
+name,Infosys Ltd
+exchange,NSE
+sector,IT Services
+as_of,2026-03-31
+kind,annual
+revenue,1500000
+ebit_margin,0.24
+tax_rate,0.25
+depreciation,30000
+capex,40000
+change_in_nwc,15000
+net_debt,-200000
+shares_outstanding,4150
+source_versions,"{""manual_upload"": ""1.0""}"

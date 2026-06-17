@@ -1,0 +1,27 @@
+[importlinter]
+root_package = research_platform
+include_external_packages = True
+
+[importlinter:contract:domain-is-pure]
+name = Domain depends on nothing outward (pure: stdlib + pydantic + own ports only)
+type = forbidden
+source_modules =
+    research_platform.domain
+forbidden_modules =
+    research_platform.ingestion
+    research_platform.storage
+    research_platform.valuation
+    research_platform.app
+    sqlalchemy
+    alembic
+    psycopg
+    fastapi
+    httpx
+
+[importlinter:contract:layers]
+name = Inward-only layering (composition root -> adapters -> domain)
+type = layers
+layers =
+    research_platform.app
+    research_platform.ingestion | research_platform.storage | research_platform.valuation
+    research_platform.domain

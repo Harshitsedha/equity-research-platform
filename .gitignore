@@ -1,0 +1,51 @@
+# --- Python ---------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+build/
+dist/
+*.egg
+
+# --- Virtualenv / uv ------------------------------------------------------
+.venv/
+venv/
+.uv/
+# Note: uv.lock IS committed (reproducible installs); only caches are ignored.
+
+# --- Tooling caches -------------------------------------------------------
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.pytype/
+.coverage
+.coverage.*
+htmlcov/
+
+# --- Env / secrets --------------------------------------------------------
+.env
+.env.*
+*.local
+secrets.*
+*.pem
+*.key
+
+# --- Postgres / Docker local data -----------------------------------------
+# Local DB data volumes / dumps (the compose volume is named, not bind-mounted,
+# but guard against any local copies or dumps).
+pgdata/
+*.sqlite
+*.sqlite3
+*.dump
+*.sql.gz
+
+# --- OS / editor ----------------------------------------------------------
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# NOTE: intentionally NOT ignored (the build depends on them):
+#   data/            sample data the e2e script reads
+#   docker-compose.yml
+#   src/research_platform/storage/migrations/   alembic migrations
