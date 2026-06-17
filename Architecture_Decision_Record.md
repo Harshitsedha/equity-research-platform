@@ -208,3 +208,65 @@ Ratify this entity model and its five ledger invariants as **Lock #3**, or flag 
 - *Use a PEP 420 namespace or a distribution-name/import-name split.* Rejected as needless complexity for a solo build; a plain, unambiguous package name is the correct fix.
 
 **Consequences.** All imports use `research_platform.*`; the import-linter `root_package` is `research_platform`. No architectural meaning is lost — only the collision is removed.
+
+---
+
+## ADR-010 — The verification harness: claims-as-output, mixed failure policy, numeric truth in the domain
+
+*Decided and built in Phase 1 Part A. This is the concrete realisation of ADR-004's "verification is core domain logic" and ADR-005's "loud failure on bad data".*
+
+**Context.** Reports may inform capital allocation, and the LLM is an unreliable external source (ADR-004). The danger is a wrong number, stated fluently, being trusted. We need a structural guarantee that arithmetic reaching a report is the platform's own, not the model's.
+
+**Decision.**
+
+1. **Claims as the LLM contract (prose FROM verified claims).** An `LLMPort` returns a `StructuredReportDraft` of discrete, checkable `Claim`s (`NUMERIC | FACTUAL | QUALITATIVE`), never trusted prose or final arithmetic. The domain verifies every claim against the frozen snapshot, then renders prose *from the verified claims* with deterministic templating. **The LLM never does arithmetic that reaches a report.**
+
+2. **Numeric truth lives in `domain/metrics.py`, not the valuation adapter.** The harness independently recomputes each `NUMERIC` claim from the snapshot's raw inputs using pure domain code. This is a deliberate split:
+   - **Snapshot-only metrics** (ratios: roce, roe, debt_equity, margins, revenue_growth) are the *standard of truth* → they live in the **domain** (pure, no I/O). The domain may not import an adapter (HARD RULE 1), and the trust standard must not depend on one.
+   - **Assumption-driven models** (DCF, comps — need levers beyond the snapshot) remain **valuation adapters** behind `ValuationPort`. They are not verification targets here (there is no single snapshot-derived "true" DCF without assumptions).
+
+3. **Mixed failure policy with explicit precedence.**
+   - **NUMERIC mismatch** (asserted vs recomputed beyond tolerance) **or un-recomputable metric ⇒ `HARD_FAILED`**: the report is **not stored**. Wrong is wrong; an un-confirmable number is not trusted.
+   - **Citation missing/dangling ⇒ `FLAGGED`**, and **missing required section ⇒ `INCOMPLETE`**: both are **flag-and-store** — surfaced for human judgement, not fatal.
+   - **Precedence:** numeric failure dominates. A draft with both a bad number and a missing section is `HARD_FAILED` (not stored).
+   - **Correct number but dangling citation ⇒ `FLAGGED`, not `FAILED`.** The value is independently confirmed; only the (existence-only) citation is weak, so it is surfaced rather than rejected.
+
+4. **Citation check is existence-only.** A `FACTUAL`/`NUMERIC` citation must resolve to a key/path that exists in the snapshot inputs (dotted paths supported). We deliberately do **not** attempt semantic support-checking ("does this datum actually support the statement").
+
+5. **Storage-boundary guard (defence in depth, single source of truth).** Storability is one domain rule — `is_storable_verification()` (storable iff not `HARD_FAILED`). It is enforced at three layers: the harness sets the status, the pipeline never assembles/saves a hard-fail, and **`save_report()` itself re-checks and raises `NonStorableReportError` before any INSERT**. So a hard-failed report cannot reach the database even if a caller bypasses the pipeline.
+
+**New decisions made while building Steps 5–6 (async path).**
+- **Hard-fail is a non-`Retry` exception ⇒ structurally not re-enqueued.** The arq job raises `ReportHardFailure` (not arq's `Retry`) on a verification hard-fail, so the worker records a terminal, loud failed-job state and never retries it. Only `TransientJobError`/connection-style errors raise `Retry`, with a bounded budget (`MAX_TRIES`) and exponential backoff. Retrying a deterministic wrong number is pointless and is made impossible by construction.
+- **Idempotency via `report.snapshot_id` unique constraint.** A re-run for the same snapshot returns the existing report (no duplicate, no noisy error). Postgres remains the ledger/idempotency/cache store (ADR-007 intent).
+- **arq is Redis-backed — discrepancy with ADR-007 now RESOLVED** (see the ADR-007 Amendment 2026-06-17). arq's broker is Redis, which contradicted ADR-007's "Postgres-backed queue / no new datastore" wording. Resolution: **Redis is accepted as the job broker only**; Postgres remains the system of record / ledger / cache / idempotency store. Redis is already operated in production, so marginal surface area is low and the ADR-008 "avoid *unfamiliar* infra" principle is honoured. The `-m "not db"` test path still needs neither Postgres nor Redis (job logic proven by direct invocation).
+
+**Alternatives rejected.**
+- *Let the LLM emit final prose/numbers and spot-check.* Rejected — that trusts the unreliable source by default; ADR-004 places verification in the domain precisely to invert this.
+- *Put ratio math in the valuation adapter and inject it into the harness via a port.* Rejected — it would either breach domain purity or make the standard of truth depend on an adapter; pure ratios are core domain logic.
+- *Hard-fail on a dangling citation.* Rejected — over-fails on citation hygiene when the number itself is independently verified; flag-and-store preserves human judgement.
+
+**Consequences.**
+- Every stored number is independently recomputed by domain code and re-derivable from its snapshot (reproducibility test). Citation/structural weaknesses are recorded on the report, not hidden.
+- The real LLM (Part B) is a one-adapter swap behind `LLMPort`; the harness, policy, and tests are untouched.
+- **Explicitly deferred (recorded, not forgotten):** semantic citation support-checking, general fabrication/hallucination detection beyond numeric + citation-existence, PDF/HTML rendering, and thesis/claim-drift tracking.
+
+---
+
+## ADR-011 — Report generation provenance is first-class
+
+*Decided in the Phase 1 hardening pass, closing the provenance debt flagged at the end of Part B. Recorded as an ADR rather than slipped in silently.*
+
+**Context.** ADR-003 makes reproducibility the governing invariant: every output must be traceable and re-derivable from versioned, immutable, stored inputs. A report's value is a function not only of its snapshot but of **what produced it** — the LLM model and the prompt template. In Part B that provenance rode informally on the LLM port's `model_name` string and (in the demo) on the snapshot's `source_versions` dict. That was expedient but not first-class: you could not cleanly query "which reports came from `claude-opus-4-8` / prompt `report-claims-v1`", and the snapshot is the wrong home (it is created at ingest, before and independent of any report generation; one snapshot can back many reports from different models). The blueprint's schema (1.4/1.5) always intended model + prompt version as dedicated fields.
+
+**Decision.** Promote **`model_version`** and **`prompt_version`** to first-class, **nullable** columns on the `report` table, with matching fields on the domain `Report` model, threaded through `run_report_pipeline` → `assemble_report` → storage. The pipeline reads them from the LLM adapter via `getattr(llm, "model_version"/"prompt_version", None)`; the `LLMPort` Protocol still only mandates `model_name`, so adapters that don't carry versions (the deterministic stub) simply yield `None`. `code_version` (the git SHA, ADR-009) is persisted on every report as well, not just on snapshots — so a stored report records the code, the model, and the prompt that produced it.
+
+- **Nullable rationale.** The deterministic/stub path has no model or prompt — those columns are `NULL`, and that is semantically correct (a report with no LLM provenance), not a missing value to backfill. Only the LLM-backed path populates them.
+- **Domain stays vendor-neutral (HARD RULE 1 preserved).** These are *generic* provenance strings — `model_version`, `prompt_version` — not Anthropic-specific. The domain and storage never import or name a vendor; the concrete values (`claude-opus-4-8`, `report-claims-v1`) originate in the ingestion adapter and travel as plain strings. This is why touching the domain here is correct, whereas in Part B (wiring the concrete Claude adapter) touching the domain would have been an architecture smell.
+- **Immutability intact.** The Alembic migration only `ADD COLUMN`s; the `report_immutable` trigger (ADR-003 / Blueprint 1.6) is untouched and still rejects UPDATE/DELETE.
+
+**Alternatives rejected.**
+- *Leave provenance on `model_name` / `source_versions`.* Rejected — not queryable as structured columns, and `source_versions` conflates the snapshot's input provenance with the report's generation provenance.
+- *Put model/prompt version on the snapshot instead of the report.* Rejected — the snapshot predates report generation and is shared across reports; report-generation provenance belongs on the report.
+- *Make the columns NOT NULL with a sentinel (e.g. `"none"`).* Rejected — a sentinel lies about there having been a model; `NULL` is the honest representation of the deterministic path.
+
+**Consequences.** A stored report is now fully self-describing for audit and reproducibility: `code_version` + `model_version` + `prompt_version` + its `snapshot_id`. Reports are queryable by the model/prompt that produced them. A reproducibility test asserts a Claude-fixture-generated report carries the correct three stamps and re-derives identically, while a stub-generated report carries `NULL` model/prompt versions and a valid `code_version`.

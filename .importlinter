@@ -11,17 +11,21 @@ forbidden_modules =
     research_platform.ingestion
     research_platform.storage
     research_platform.valuation
+    research_platform.jobs
     research_platform.app
     sqlalchemy
     alembic
     psycopg
+    arq
+    anthropic
     fastapi
     httpx
 
 [importlinter:contract:layers]
-name = Inward-only layering (composition root -> adapters -> domain)
+name = Inward-only layering (composition root -> jobs -> adapters -> domain)
 type = layers
 layers =
     research_platform.app
+    research_platform.jobs
     research_platform.ingestion | research_platform.storage | research_platform.valuation
     research_platform.domain

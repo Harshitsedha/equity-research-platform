@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
-from research_platform.domain.models import Snapshot, Stock, ValuationRun
+from research_platform.domain.models import Report, Snapshot, Stock, ValuationRun
 
 
 @runtime_checkable
@@ -27,3 +27,11 @@ class RepositoryPort(Protocol):
     # --- ValuationRun (immutable) -----------------------------------------
     def save_valuation_run(self, run: ValuationRun) -> ValuationRun: ...
     def get_valuation_run(self, run_id: int) -> ValuationRun | None: ...
+
+    # --- Report (immutable) -----------------------------------------------
+    def save_report(self, report: Report) -> Report:
+        """Persist a Report. MUST refuse a non-storable (HARD_FAILED) result."""
+        ...
+
+    def get_report(self, report_id: int) -> Report | None: ...
+    def get_report_by_snapshot(self, snapshot_id: int) -> Report | None: ...

@@ -12,6 +12,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from research_platform.domain.models import (
+    Report as DomainReport,
+)
+from research_platform.domain.models import (
     Snapshot as DomainSnapshot,
 )
 from research_platform.domain.models import (
@@ -20,8 +23,18 @@ from research_platform.domain.models import (
 from research_platform.domain.models import (
     ValuationRun as DomainValuationRun,
 )
+from research_platform.domain.verification import is_storable_verification
 from research_platform.storage import models as orm
 from research_platform.storage.db import make_session_factory
+
+
+class NonStorableReportError(RuntimeError):
+    """Raised when persistence is attempted for a HARD_FAILED (non-storable) report.
+
+    This is the storage-level guard enforcing ADR-010: the verification harness
+    decides storability and the persistence boundary HONORS it, so a hard-failed
+    report cannot reach the database even if a caller bypasses the pipeline.
+    """
 
 
 # --- ORM -> domain mappers -------------------------------------------------
@@ -60,6 +73,21 @@ def _to_domain_run(row: orm.ValuationRun) -> DomainValuationRun:
         assumptions=row.assumptions,
         result=row.result,
         code_version=row.code_version,
+        created_at=row.created_at,
+    )
+
+
+def _to_domain_report(row: orm.Report) -> DomainReport:
+    return DomainReport(
+        id=row.id,
+        stock_id=row.stock_id,
+        snapshot_id=row.snapshot_id,
+        kind=row.kind,
+        content=row.content,
+        verification=row.verification,
+        code_version=row.code_version,
+        model_version=row.model_version,
+        prompt_version=row.prompt_version,
         created_at=row.created_at,
     )
 
@@ -139,3 +167,41 @@ class PostgresRepository:
         with self._session_factory() as session:
             row = session.get(orm.ValuationRun, run_id)
             return _to_domain_run(row) if row else None
+
+    # --- Report (immutable; guarded) --------------------------------------
+    def save_report(self, report: DomainReport) -> DomainReport:
+        # THE GUARD: refuse to persist a non-storable (HARD_FAILED) result. This
+        # lives at the persistence boundary so it cannot be bypassed by a caller.
+        if not is_storable_verification(report.verification):
+            raise NonStorableReportError(
+                "refusing to persist a HARD_FAILED report "
+                f"(stock_id={report.stock_id}, snapshot_id={report.snapshot_id}): "
+                "ledger guard — wrong numbers never reach storage"
+            )
+        with self._session_factory() as session:
+            row = orm.Report(
+                stock_id=report.stock_id,
+                snapshot_id=report.snapshot_id,
+                kind=report.kind,
+                content=report.content,
+                verification=report.verification,
+                code_version=report.code_version,
+                model_version=report.model_version,
+                prompt_version=report.prompt_version,
+            )
+            session.add(row)
+            session.commit()
+            session.refresh(row)
+            return _to_domain_report(row)
+
+    def get_report(self, report_id: int) -> DomainReport | None:
+        with self._session_factory() as session:
+            row = session.get(orm.Report, report_id)
+            return _to_domain_report(row) if row else None
+
+    def get_report_by_snapshot(self, snapshot_id: int) -> DomainReport | None:
+        with self._session_factory() as session:
+            row = session.scalar(
+                select(orm.Report).where(orm.Report.snapshot_id == snapshot_id)
+            )
+            return _to_domain_report(row) if row else None

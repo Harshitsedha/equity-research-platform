@@ -19,10 +19,10 @@ install:
 	uv sync
 
 up:
-	docker compose up -d db
+	docker compose up -d db redis
 	@echo "waiting for postgres to become healthy..."
 	@until [ "$$(docker inspect -f '{{.State.Health.Status}}' erp_postgres 2>/dev/null)" = "healthy" ]; do sleep 1; done
-	@echo "postgres is healthy"
+	@echo "postgres is healthy (redis broker also started)"
 
 down:
 	docker compose down

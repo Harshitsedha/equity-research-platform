@@ -10,6 +10,9 @@ dependencies = [
     "alembic>=1.13",
     "psycopg[binary]>=3.1",
     "structlog>=24.1",
+    "arq>=0.26",
+    "anthropic>=0.40",
+    "python-dotenv>=1.0",
 ]
 
 [dependency-groups]
@@ -29,6 +32,10 @@ packages = ["src/research_platform"]
 testpaths = ["tests"]
 markers = [
     "db: tests that require a live PostgreSQL (docker-compose). Deselect with -m 'not db'.",
+    "live: opt-in tests that make a real Anthropic API call (need ANTHROPIC_API_KEY). Deselected by default.",
 ]
+
+# Default test run excludes live API tests (no network/key required).
+addopts = "-m 'not live'"
 
 # import-linter reads .importlinter at the repo root (see that file).

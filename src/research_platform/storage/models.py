@@ -78,3 +78,25 @@ class ValuationRun(Base):
         DateTime(timezone=True), server_default=func.now()
     )
     # IMMUTABLE: enforced by DB trigger (see migrations) — no UPDATE/DELETE.
+
+
+class Report(Base):
+    __tablename__ = "report"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    stock_id: Mapped[int] = mapped_column(ForeignKey("stock.id"), index=True)
+    # one report per snapshot in Part A (supports idempotency by snapshot_id).
+    snapshot_id: Mapped[int] = mapped_column(
+        ForeignKey("snapshot.id"), unique=True, index=True
+    )
+    kind: Mapped[str] = mapped_column(String(16))
+    content: Mapped[dict] = mapped_column(JSONB)
+    verification: Mapped[dict] = mapped_column(JSONB)
+    code_version: Mapped[str] = mapped_column(String(64))
+    # Generic LLM provenance (ADR-011); nullable — null on the deterministic path.
+    model_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    prompt_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    # IMMUTABLE: enforced by DB trigger (see migrations) — no UPDATE/DELETE.

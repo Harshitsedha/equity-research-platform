@@ -14,7 +14,15 @@
 
 **Rejected.** Celery+Redis broker and event-streaming (Kafka) — both add infrastructure and failure modes for throughput this workload doesn't have. A hand-rolled poller — rejected as reinventing arq.
 
-**Consequences.** No new datastore (Postgres is queue + ledger + cache). Slow paths async; fast paths (ledger reads) synchronous. Jobs are observable end-to-end.
+**Consequences.** ~~No new datastore (Postgres is queue + ledger + cache).~~ *(superseded — see Amendment 2026-06-17.)* Slow paths async; fast paths (ledger reads) synchronous. Jobs are observable end-to-end.
+
+> **Amendment — 2026-06-17 (supersedes the "no new datastore" / "durable Postgres-backed queue" wording above).**
+>
+> **What changed.** Jobs use **arq with a Redis broker**. **PostgreSQL remains the system of record / ledger / cache / idempotency store** — all immutable research data and the idempotency anchor (`report.snapshot_id` unique constraint) stay in Postgres. Redis is **solely the arq job broker** (ephemeral queue state); no research data lives in it and losing it loses no ledger history.
+>
+> **Why.** The original wording was factually wrong: **arq requires Redis** — it cannot run on Postgres — so "Postgres-backed queue (arq)" was internally contradictory (flagged during the Phase 1A build). The ADR-008 *consolidation* principle was about avoiding **unfamiliar** infrastructure, not forbidding all additions; **Redis is already operated by this operator in production**, so its marginal operational surface area is low. Adding a familiar broker for the one component that mandates it honours the principle better than contorting around it.
+>
+> **What did NOT change.** Idempotency still comes from the ledger/snapshot (re-runs safe). Retries are still bounded exponential backoff; final failure is still a loud, visible failed-job state. The dependency rule is unaffected — the broker lives behind the `jobs`/composition layers; the domain never sees arq or Redis (enforced by import-linter). Local dev gets a Redis service in `docker-compose.yml`, configurable via `REDIS_URL`; the test path proves job logic by direct invocation and needs neither Postgres nor Redis for the `-m "not db"` set.
 
 ### ADR-008 — Tech stack: consolidation over novelty
 

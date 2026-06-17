@@ -107,6 +107,46 @@ DB-backed tests are marked `db` and **skip automatically** when Postgres is
 unreachable, so the domain suite always runs anywhere. To run only the
 infrastructure-free proof: `uv run pytest -m "not db"`.
 
+## Phase 1A — the report pipeline (claims → verify → report)
+
+Part A adds the full report pipeline proven with a **deterministic stub LLM** (no
+real model, no network, no API keys — the real Claude adapter is Part B). The
+governing principle (**ADR-010**): the LLM never does arithmetic that reaches a
+report — it emits structured, checkable `Claim`s; the domain verifies each against
+the frozen snapshot; prose is rendered *from verified claims*.
+
+- **Verification harness** (`domain/verification.py`): (a) recompute each NUMERIC
+  claim from snapshot inputs (`domain/metrics.py`) and compare; (b) citation must
+  resolve to an existing input key/path; (c) every `REQUIRED_SECTIONS` entry needs
+  a claim.
+- **Mixed failure policy:** numeric mismatch ⇒ `HARD_FAILED` (**not stored**);
+  citation/structural issues ⇒ flag-and-store. Numeric failure dominates.
+- **Storage guard:** `save_report()` itself refuses a non-storable result
+  (`NonStorableReportError`) — a hard-failed report cannot reach the DB.
+- **Provenance (ADR-011):** every stored report records `code_version` (git SHA) and
+  — when an LLM produced it — first-class, nullable `model_version` and
+  `prompt_version` columns (e.g. `claude-opus-4-8` / `report-claims-v1`). The stub
+  path leaves them `NULL`. Reports are queryable by the model/prompt that produced
+  them; the fields are vendor-neutral (the domain never names a provider).
+- **Async path:** `generate_report_job` (arq) wraps generate→verify→assemble→persist;
+  idempotent via `report.snapshot_id`; transient errors retried (bounded); a
+  verification hard-fail is terminal and **not** retried.
+
+Run the four-outcome end-to-end (needs `make up && make migrate`):
+
+```bash
+uv run python scripts/phase1a_e2e.py
+# GOOD -> PASSED+stored+reproducible; BAD_NUMERIC -> HARD_FAILED + 0 rows in DB;
+# BAD_CITATION -> PASSED_WITH_FLAGS+stored; INCOMPLETE -> INCOMPLETE+stored
+```
+
+The async worker (arq) runs with
+`uv run arq research_platform.app.worker.WorkerSettings` and needs a Redis at
+`REDIS_URL` (default `redis://localhost:6380`, provided by docker-compose). Redis
+is the **job broker only** — Postgres remains the system of record / ledger /
+cache / idempotency store (see ADR-007 Amendment 2026-06-17). The job *logic* is
+fully covered by tests via direct invocation (no Redis needed).
+
 ## Notes / recorded deviations from the blueprint
 
 - **Top-level package renamed `platform` → `research_platform`.** The blueprint
