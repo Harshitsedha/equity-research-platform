@@ -55,20 +55,39 @@ def is_storable_verification(verification: dict) -> bool:
     return verification.get("overall") != OverallStatus.HARD_FAILED.value
 
 
-def citation_exists(inputs: dict, citation: str | None) -> bool:
-    """True iff ``citation`` (a dotted key path) resolves within ``inputs``.
+def resolve_path(inputs: dict, key: str | None) -> tuple[bool, object]:
+    """Navigate a dotted ``key`` into ``inputs``. PURELY STRUCTURAL.
 
-    Existence only — NOT semantic support. ``"a.b"`` resolves nested dicts.
+    Returns ``(found, value)``. ``found`` is whether every path segment resolved;
+    ``value`` is the node reached (``inputs[a][b]...``) when found, else ``None``.
+    It makes NO interpretation: a present-but-null leaf yields ``(True, None)`` —
+    distinguishing "absent" from "present with a null value" is the caller's job
+    (the drift resolver in ``domain.drift`` splits those into different reasons).
+
+    This is the single shared traversal: ``citation_exists`` is a thin
+    ``found``-only wrapper over it, and the 3b assumption resolver reuses it to
+    obtain the value — there is exactly ONE dotted-path traversal in the domain.
     """
-    if not citation:
-        return False
+    if not key:
+        return (False, None)
     node: object = inputs
-    for part in citation.split("."):
+    for part in key.split("."):
         if isinstance(node, dict) and part in node:
             node = node[part]
         else:
-            return False
-    return True
+            return (False, None)
+    return (True, node)
+
+
+def citation_exists(inputs: dict, citation: str | None) -> bool:
+    """True iff ``citation`` (a dotted key path) resolves within ``inputs``.
+
+    Existence only — NOT semantic support. ``"a.b"`` resolves nested dicts. A thin
+    wrapper over :func:`resolve_path` (the shared traversal); its semantics are
+    unchanged (present-but-null still counts as existing).
+    """
+    found, _ = resolve_path(inputs, citation)
+    return found
 
 
 def _verify_numeric(claim: Claim, inputs: dict) -> ClaimVerification:
