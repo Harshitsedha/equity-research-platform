@@ -13,12 +13,14 @@ dependencies = [
     "arq>=0.26",
     "anthropic>=0.40",
     "python-dotenv>=1.0",
+    "fastapi>=0.137.1",
 ]
 
 [dependency-groups]
 dev = [
     "pytest>=8.2",
     "import-linter>=2.0",
+    "httpx>=0.28.1",
 ]
 
 [build-system]

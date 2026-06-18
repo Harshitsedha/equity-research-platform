@@ -270,3 +270,55 @@ Ratify this entity model and its five ledger invariants as **Lock #3**, or flag 
 - *Make the columns NOT NULL with a sentinel (e.g. `"none"`).* Rejected — a sentinel lies about there having been a model; `NULL` is the honest representation of the deterministic path.
 
 **Consequences.** A stored report is now fully self-describing for audit and reproducibility: `code_version` + `model_version` + `prompt_version` + its `snapshot_id`. Reports are queryable by the model/prompt that produced them. A reproducibility test asserts a Claude-fixture-generated report carries the correct three stamps and re-derives identically, while a stub-generated report carries `NULL` model/prompt versions and a valid `code_version`.
+
+---
+
+## ADR-012 — Deployment topology: dedicated VPS, fully isolated from PreMarket Pro
+
+*Decided in the Phase-2a planning session and recorded here as owed. This concerns where and how the platform runs, not its internals.*
+
+**Context.** The Catalyst/News slice (ADR-004) is sourced from the operator's existing **PreMarket Pro** product. The tempting shortcut is to co-locate the research platform on PreMarket Pro's infrastructure to "reuse what's there" — its database, its host, its network. But the two systems have different purposes, different change cadences, and different blast radii. PreMarket Pro is a live, externally-facing product; the research platform is the operator's reproducibility-first ledger (ADR-003/005), where the failure that matters is a corrupted or unreproducible research history. Coupling their runtimes would let an incident, deploy, migration, or resource spike in one degrade or corrupt the other, and would erode the hard module boundaries the architecture is built on (ADR-001/004) by re-introducing them as a shared-infrastructure dependency.
+
+**Decision.** The research platform runs on its **own dedicated VPS**, with **full runtime isolation from PreMarket Pro**: separate host, separate PostgreSQL instance, separate Redis (the job broker, ADR-010 amendment), separate deploy lifecycle, separate backups (ADR-005). The only coupling between the two systems is a **network-boundary integration**: the platform consumes PreMarket Pro's catalyst/news data across an explicit network interface (an API/feed), exactly as it consumes any other external source — through an Ingestion adapter behind a port (ADR-004). No shared database, no shared process, no in-process imports, no shared filesystem.
+
+**Alternatives rejected.**
+- *Co-locate on PreMarket Pro's host/database.* Rejected — couples blast radius (one system's incident/deploy/migration can corrupt or stall the other), violates the ledger-integrity posture (ADR-005), and dissolves the module boundary into a shared-infra dependency. The marginal hosting saving is not worth risking the research history.
+- *Serverless / managed-PaaS spread across providers.* Rejected for this scope (ADR-002, ADR-008): a single well-backed-up VPS is the correct, familiar, low-surface-area posture for a solo operator; multi-service hosting adds operational surface without solving a problem this system has.
+- *Shared database, separate schemas.* Rejected — "separate schemas" still shares an instance's failure domain, connection limits, backup/restore lifecycle, and migration surface. It is isolation in name only.
+
+**Consequences.**
+- The PreMarket Pro integration is a **one-adapter swap behind a port** (ADR-004), reachable only over the network — it can be stubbed in tests and replaced without touching the core, and its outages degrade gracefully (ADR-005) rather than taking the platform down.
+- Independent deploy/migration/backup lifecycles: a schema migration here (e.g. Phase 2a's `0005`) cannot affect PreMarket Pro, and vice-versa.
+- A modest additional hosting/ops cost (one more VPS to run and back up) is accepted as the price of isolation. Should team-scale ever arrive (ADR-002), the clean network boundary already drawn here is exactly what an extraction would need — paid for only if and when required.
+
+---
+
+## ADR-013 — The mutable aggregate over immutable leaves; no denormalised ledger state
+
+*Decided and built in Phase 2a. This is the concrete realisation, at the aggregate level, of the ADR-003 ledger invariant — and it records a deliberate, time-boxed piece of tech debt created by introducing the aggregate without reworking Phase-1.*
+
+**Context.** Phase 1 gave us immutable, append-only ledger *leaves* — `Snapshot`, `ValuationRun`, `Report` — each a frozen, content-stamped row protected by a DB trigger (ADR-003, Blueprint 1.6). What was missing was the *entity* that turns isolated leaves into a living coverage record per ticker: identity that persists across snapshots, a mutable profile (symbol/name/exchange change over time), a coverage lifecycle (`candidate → active → dropped`), and an ordered view of the ticker's snapshot history. That entity — the **`Stock` aggregate root** — is, by nature, **mutable**, and it sits *above* immutable leaves. The risk in modelling it is the classic one: smuggling derived/denormalised state (a stored "current snapshot", a writable "latest valuation", a cached status) onto the mutable entity, which then drifts from the ledger and quietly becomes a second, untrustworthy source of truth — exactly the failure ADR-003 exists to prevent.
+
+**Decision.**
+
+1. **A mutable aggregate composed over immutable leaves.** `domain.stock.Stock` (pure Pydantic, ADR-004) is the aggregate root. Its identity is an **internal UUID**; **ISIN** is the stable natural key; `ticker`/`name`/`exchange`/`sector`/`profile` and coverage `status` are mutable. The leaves it references stay immutable and trigger-protected. The aggregate's storage home — the `stock` table — is the **mutable registry** and deliberately carries **no immutability trigger**; its coverage-status changes are audited in an **append-only `status_transition` table** that *does* reuse the ledger's `block_mutation()` trigger. So mutability and immutability are cleanly separated by table, and every status change leaves an immutable audit trail.
+
+2. **No denormalised ledger state ("latest" is always a query).** The aggregate owns an **append-only timeline of snapshot references** and has **no** `current_snapshot` / `current_valuation` writable field. "Latest anything" is a *query over the timeline* (`latest_snapshot_ref`), never a stored column that could drift. Likewise the snapshot timeline is **not** persisted as aggregate state — it is *projected* from the `snapshot` table on load, ordered by `(as_of, snapshot_id)`. The single source of truth remains the ledger.
+
+3. **Invariants live in the domain, not the query/storage layer.** The legal status-transition graph (`candidate→active`, `candidate→dropped`, `active→dropped`, `dropped→active`; `candidate` initial-only; no self-loops) is enforced by `Stock.transition_to`, which raises `IllegalStatusTransition` and mutates nothing on an illegal edge. Timeline ordering is enforced on append (`add_snapshot_ref` insorts), so an in-memory aggregate and a round-tripped one have a byte-for-byte identical timeline — the ordering guarantee does not depend on the reload query.
+
+4. **The surrogate int PK stays buried in storage.** Phase 1's ledger FK graph keys on the `stock` table's surrogate **int** PK. Rather than churn that graph (and the frozen leaf models) to UUID, Phase 2a keeps the int PK and **adds** a unique `uuid` column as the aggregate's identity. The guardrail: `StockRepository` is addressed by **UUID** (`get_by_id`) or **ISIN** (`get_by_isin`); nothing above the storage adapter references the int PK. The adapter resolves int↔UUID internally; snapshots (written via the Phase-1 ledger path, which is inherently int-keyed) get their stock's int PK only through the existing storage-boundary API.
+
+5. **Two `Stock` types is DELIBERATE, TEMPORARY tech debt — with a named retirement condition.** Introducing the aggregate without reworking the Phase-1 persistence path leaves **two** `Stock` representations mapping the same row: the legacy registry **DTO** `domain.models.Stock` (used by the Phase-1 `RepositoryPort`/`PostgresRepository`) and the **aggregate root** `domain.stock.Stock` (used by `StockRepository`/`SqlStockRepository`). **The aggregate root is canonical** as of Phase 2a; the DTO is legacy. `isin` was added to the DTO additively so the shared `stock` row carries the natural key (it is `NOT NULL UNIQUE` in storage). **Retirement condition:** the legacy DTO and `RepositoryPort` are removed once their consumers (ingestion upsert, the report jobs/pipeline, and the Phase-0/1 scripts/tests) migrate to the aggregate and `StockRepository`. Until then this is accepted, recorded debt — not a permanent two-headed model. Naming it here, with the canonical entity and the exit criterion explicit, is what stops "temporary" from silently becoming permanent.
+
+**Alternatives rejected.**
+- *Store "current snapshot"/"latest valuation" on the stock for read convenience.* Rejected — it is denormalised ledger state that drifts from the append-only truth; the whole point of ADR-003 is that derived facts are *computed* from frozen inputs, not cached on a mutable row. Reads over a tiny dataset are trivially fast (ADR-006).
+- *Migrate the stock PK and the ledger FK graph from int to UUID now.* Rejected for Phase 2a — it would retype the frozen leaf models' `stock_id`, churn the sealed FK graph, and ripple across ingestion/jobs/scripts/tests, for no behavioural gain over a unique `uuid` column. The int PK is harmless as long as it stays buried (guardrail above). Revisitable if the FK graph is reworked later.
+- *Put the aggregate's mutability under the same immutability trigger as the leaves.* Rejected — the stock registry is *meant* to be mutable (symbol/status change). Immutability belongs on the leaves and on the **status-transition audit log**, not on the registry row itself.
+- *Collapse the legacy DTO and the aggregate immediately.* Rejected as out of Phase-2a scope — reworking the Phase-1 repo/pipeline is a separate, larger change; doing it under this phase would breach the "ledger tables/contracts untouched" guarantee. Hence the recorded debt + retirement condition instead.
+
+**Consequences.**
+- The coverage record is a faithful, mutable view *over* the immutable ledger: status history is itself an append-only, trigger-protected audit log, and the snapshot timeline is always a projection of frozen rows — there is no second source of truth to drift.
+- Domain-level invariants (legal transitions, timeline order) hold identically in memory and after a DB round-trip; tests assert both, including that an illegal transition writes no audit row.
+- The platform temporarily carries two `Stock` types; the canonical one is the aggregate, and the debt has an explicit exit. Anyone reading this in six months knows which entity to build against and what "done" looks like for retiring the other.
+- The int↔UUID split is invisible above storage, leaving the door open to a future full-UUID migration without forcing it now.

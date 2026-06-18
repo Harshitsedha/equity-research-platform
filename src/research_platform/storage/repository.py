@@ -41,6 +41,7 @@ class NonStorableReportError(RuntimeError):
 def _to_domain_stock(row: orm.Stock) -> DomainStock:
     return DomainStock(
         id=row.id,
+        isin=row.isin,
         ticker=row.ticker,
         name=row.name,
         exchange=row.exchange,
@@ -102,6 +103,7 @@ class PostgresRepository:
     def save_stock(self, stock: DomainStock) -> DomainStock:
         with self._session_factory() as session:
             row = orm.Stock(
+                isin=stock.isin,
                 ticker=stock.ticker,
                 name=stock.name,
                 exchange=stock.exchange,

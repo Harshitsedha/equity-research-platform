@@ -15,6 +15,7 @@ from sqlalchemy.exc import ProgrammingError
 
 from research_platform.domain.ledger import freeze_snapshot
 from research_platform.domain.models import SnapshotKind, Stock, ValuationRun
+from tests.support.isins import synthetic_isin
 
 pytestmark = pytest.mark.db
 
@@ -24,7 +25,9 @@ def stored_snapshot(repository):
     # Unique ticker per test: the ledger is append-only (rows can't be deleted),
     # so tests share one schema and must not collide on the unique ticker.
     ticker = f"IMMUT_{uuid.uuid4().hex[:8]}"
-    stock = repository.save_stock(Stock(ticker=ticker, name="Immutable Co"))
+    stock = repository.save_stock(
+        Stock(ticker=ticker, name="Immutable Co", isin=synthetic_isin(ticker))
+    )
     snap = freeze_snapshot(
         stock_id=stock.id,
         as_of=dt.date(2026, 3, 31),
