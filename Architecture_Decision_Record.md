@@ -322,3 +322,20 @@ Ratify this entity model and its five ledger invariants as **Lock #3**, or flag 
 - Domain-level invariants (legal transitions, timeline order) hold identically in memory and after a DB round-trip; tests assert both, including that an illegal transition writes no audit row.
 - The platform temporarily carries two `Stock` types; the canonical one is the aggregate, and the debt has an explicit exit. Anyone reading this in six months knows which entity to build against and what "done" looks like for retiring the other.
 - The int↔UUID split is invisible above storage, leaving the door open to a future full-UUID migration without forcing it now.
+
+---
+
+## ADR-014 — Frontend topology: monorepo `web/`, server-side RSC fetch over the network boundary, read-only viewer
+
+*Decided and built in Phase 2b-ui — the first frontend. It records where the web app lives and the one boundary that governs it; the backend (2a aggregate + 2b-api) is untouched.*
+
+**Context.** Phase 2b-api sealed a read-only HTTP interface over the Stock aggregate, with the wire contract deliberately owning its DTOs and keeping the surrogate int PK off the wire (HARD RULE 1/4 there). The first UI must project those three endpoints without re-opening any of that: no writes, no auth, no LLM, no live data, and — critically — without handing the browser the API origin or letting the stock int PK creep back into a URL or the DOM, which is exactly where building from the wrong identifier is easiest.
+
+**Decision.** The web app is a **Next.js (App Router) + TypeScript + Tailwind** project at **`web/`**, a sibling of `src/` with its **own** `package.json`/`tsconfig`/`node_modules`, fully isolated from the Python tooling (`node_modules`, `.next`, and the E2E `manifest.json` are git-ignored). All backend data is fetched in **React Server Components, server-side**, from a **server-only `FASTAPI_BASE_URL`** (never `NEXT_PUBLIC_`) through a single `lib/api.ts` marked `import "server-only"` — every page goes through it, with `cache: "no-store"` on each request so a read-only viewer over mutable coverage data never serves a stale Next data cache. The browser therefore never holds the API origin or any credential; only plain serialized data is passed down. Routes **mirror the API identity contract** — `/stocks` → `/stocks/[isin]` → `/stocks/[isin]/snapshots/[snapshotId]` (stocks ISIN-keyed, snapshots int-addressed) — and the stock int PK appears in no route, link, or rendered text, asserted by a Playwright guardrail that scans the DOM for a seeded sentinel pk (with a paired positive control proving the scan can see a rendered int). The API's 404s map onto Next's `notFound()` to render terminal-style error pages, not the framework default.
+
+**Alternatives rejected.**
+- *Client-side data fetching (browser → FastAPI).* Rejected — it exposes the API origin to the browser, forces CORS, and invites a client `fetch` that bypasses the server-only boundary. RSC server-side fetch keeps the origin and the whole wire contract on the server.
+- *Co-locating the web app inside the Python package / sharing tooling.* Rejected — the Python package and the web app have different toolchains and lifecycles; bleeding them together erodes the boundary for no gain. An isolated `web/` keeps each clean.
+- *A stubbed/recorded API for the E2E run.* Rejected — the guardrail and the 404/ownership paths only mean something against the REAL running API; the harness boots actual uvicorn against a disposable, freshly-migrated DB (the same posture the pytest suite already uses).
+
+**Consequences.** The frontend is a thin, typed projection: TS DTOs mirror the API DTOs so the wire contract is typed end to end, and the int PK guardrail now holds on both sides of the network boundary. The viewer adds no write/auth/LLM/live-data surface and no deploy config (ADR-012 still defers provisioning — local dev only). Swapping where the API runs is a single env var; the browser is never coupled to it.

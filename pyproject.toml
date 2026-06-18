@@ -21,6 +21,9 @@ dev = [
     "pytest>=8.2",
     "import-linter>=2.0",
     "httpx>=0.28.1",
+    # ASGI server to run the FastAPI app over HTTP for the web/ Playwright E2E
+    # harness (the unit/api tests use Starlette's in-process TestClient instead).
+    "uvicorn>=0.30",
 ]
 
 [build-system]
