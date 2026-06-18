@@ -32,6 +32,7 @@ from research_platform.ingestion.llm.stub_adapter import StubLLMAdapter, StubMod
 from research_platform.jobs.report_jobs import ReportHardFailure, generate_report_job
 from research_platform.storage import models as orm
 from research_platform.storage.db import make_session_factory
+from tests.support.isins import synthetic_isin
 
 RICH_INPUTS = {
     "revenue": 1500.0, "prev_revenue": 1200.0, "ebit": 360.0, "net_income": 240.0,
@@ -48,8 +49,9 @@ def _record(name: str, ok: bool, detail: str) -> None:
 
 
 def _make_snapshot(repo):
+    ticker = f"E2E{uuid.uuid4().hex[:6].upper()}"
     stock = repo.save_stock(
-        Stock(ticker=f"E2E{uuid.uuid4().hex[:6].upper()}", name="E2E Co", sector="Test")
+        Stock(ticker=ticker, name="E2E Co", sector="Test", isin=synthetic_isin(ticker))
     )
     snap = freeze_snapshot(
         stock_id=stock.id, as_of=dt.date(2026, 3, 31), kind=SnapshotKind.annual,

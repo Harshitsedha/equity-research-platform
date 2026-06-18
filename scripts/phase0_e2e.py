@@ -17,6 +17,7 @@ from research_platform.app.composition import build_platform
 from research_platform.domain.ledger import freeze_from_document
 from research_platform.domain.models import Stock, ValuationRun
 from research_platform.domain.version import CODE_VERSION
+from tests.support.isins import REAL_ISINS
 
 log = structlog.get_logger()
 
@@ -44,6 +45,7 @@ def main() -> int:
                 exchange=doc.exchange,
                 sector=doc.sector,
                 profile=doc.profile,
+                isin=REAL_ISINS["INFY"],
             )
         )
     assert stock.id is not None

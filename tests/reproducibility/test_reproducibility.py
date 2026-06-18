@@ -15,6 +15,7 @@ from research_platform.domain.models import Stock, ValuationRun
 from research_platform.domain.version import CODE_VERSION
 from research_platform.ingestion.document_adapter import FileDocumentAdapter
 from tests.conftest import ROOT
+from tests.support.isins import REAL_ISINS
 
 pytestmark = pytest.mark.db
 
@@ -31,7 +32,13 @@ def test_valuation_run_re_derives_identically(repository):
 
     doc = FileDocumentAdapter().parse(ROOT / "data" / "sample_infy.json")
     stock = repository.save_stock(
-        Stock(ticker=doc.ticker, name=doc.name, exchange=doc.exchange, sector=doc.sector)
+        Stock(
+            ticker=doc.ticker,
+            name=doc.name,
+            exchange=doc.exchange,
+            sector=doc.sector,
+            isin=REAL_ISINS["INFY"],
+        )
     )
     snapshot = repository.save_snapshot(freeze_from_document(doc, stock_id=stock.id))
 
@@ -67,7 +74,9 @@ def test_two_independent_runs_match(repository):
     """Determinism across two separate stored runs from the same snapshot."""
     platform = build_platform(repository=repository)
     doc = FileDocumentAdapter().parse(ROOT / "data" / "sample_infy.json")
-    stock = repository.save_stock(Stock(ticker="REPRO2", name=doc.name))
+    stock = repository.save_stock(
+        Stock(ticker="REPRO2", name=doc.name, isin=REAL_ISINS["TCS"])
+    )
     snapshot = repository.save_snapshot(freeze_from_document(doc, stock_id=stock.id))
 
     r1 = repository.save_valuation_run(

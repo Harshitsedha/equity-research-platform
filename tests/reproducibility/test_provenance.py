@@ -24,6 +24,7 @@ from research_platform.ingestion.llm.claude_adapter import (
 from research_platform.ingestion.llm.stub_adapter import StubLLMAdapter
 from research_platform.storage import models as orm
 from tests.adapters.test_claude_adapter import GOOD_JSON
+from tests.support.isins import synthetic_isin
 
 pytestmark = pytest.mark.db
 
@@ -35,7 +36,9 @@ INPUTS = {
 
 
 def _snapshot(repository, ticker: str) -> Snapshot:
-    stock = repository.save_stock(Stock(ticker=ticker, name="Prov Co"))
+    stock = repository.save_stock(
+        Stock(ticker=ticker, name="Prov Co", isin=synthetic_isin(ticker))
+    )
     return repository.save_snapshot(
         Snapshot(stock_id=stock.id, as_of=dt.date(2026, 3, 31), kind=SnapshotKind.annual,
                  inputs=INPUTS, code_version=CODE_VERSION, content_hash="h")

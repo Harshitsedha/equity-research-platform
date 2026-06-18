@@ -24,9 +24,18 @@ class SnapshotKind(str, enum.Enum):
 
 
 class Stock(BaseModel):
-    """The persistent anchor. Mutable (slowly): identity + durable profile."""
+    """The persistent anchor. Mutable (slowly): identity + durable profile.
+
+    NOTE (ADR-013): this is the legacy Phase-1 registry DTO, retained because
+    reworking the Phase-1 ``RepositoryPort`` is out of Phase-2a scope. The
+    canonical entity is now the ``domain.stock.Stock`` aggregate root; this DTO
+    (and ``RepositoryPort``) are retired once their consumers migrate. ``isin``
+    was added here additively so the same ``stock`` row carries the natural key
+    the aggregate requires — DB persistence needs it (``isin`` is NOT NULL).
+    """
 
     id: int | None = None
+    isin: str | None = None
     ticker: str
     name: str
     exchange: str = "NSE"
