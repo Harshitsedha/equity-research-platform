@@ -13,6 +13,7 @@ forbidden_modules =
     research_platform.valuation
     research_platform.jobs
     research_platform.app
+    research_platform.api
     sqlalchemy
     alembic
     psycopg
@@ -22,10 +23,22 @@ forbidden_modules =
     httpx
 
 [importlinter:contract:layers]
-name = Inward-only layering (composition root -> jobs -> adapters -> domain)
+name = Inward-only layering (api -> composition root -> jobs -> adapters -> domain)
 type = layers
 layers =
+    research_platform.api
     research_platform.app
     research_platform.jobs
     research_platform.ingestion | research_platform.storage | research_platform.valuation
     research_platform.domain
+
+[importlinter:contract:api-not-on-storage]
+name = API depends on domain ports, not storage implementations
+type = forbidden
+source_modules =
+    research_platform.api
+forbidden_modules =
+    research_platform.storage
+# The api reaches storage ONLY transitively, through the composition root
+# (build_platform). A DIRECT api -> storage import is the violation we forbid.
+allow_indirect_imports = True
