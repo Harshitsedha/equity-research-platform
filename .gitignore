@@ -41,6 +41,17 @@ pgdata/
 *.dump
 *.sql.gz
 
+# --- Web app (web/ — Next.js, fully isolated from the Python tooling) ------
+web/node_modules/
+web/.next/
+web/next-env.d.ts
+web/test-results/
+web/playwright-report/
+web/playwright/.cache/
+web/e2e/manifest.json
+web/.env
+web/.env.*
+
 # --- OS / editor ----------------------------------------------------------
 .DS_Store
 Thumbs.db
