@@ -28,6 +28,8 @@ from bisect import insort
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from research_platform.domain.thesis import Thesis, ThesisAssumption
+
 
 class CoverageStatus(str, enum.Enum):
     """Where a ticker sits in the research pipeline."""
@@ -65,6 +67,21 @@ class IllegalStatusTransition(Exception):
         )
 
 
+class CrossStockAnchorError(Exception):
+    """Raised when a thesis tries to anchor a run whose snapshot this stock does
+    not own (HARD RULE 3). The aggregate is left untouched — the check happens
+    before any mutation, so no thesis is recorded.
+    """
+
+    def __init__(self, anchor_snapshot_id: int, stock_isin: str) -> None:
+        self.anchor_snapshot_id = anchor_snapshot_id
+        self.stock_isin = stock_isin
+        super().__init__(
+            f"anchor snapshot {anchor_snapshot_id} is not owned by stock "
+            f"{stock_isin!r}: a thesis may only anchor a run on this stock"
+        )
+
+
 class StatusTransition(BaseModel):
     """One audited coverage-status change. Immutable, append-only in the history."""
 
@@ -99,6 +116,16 @@ def _timeline_key(ref: SnapshotRef) -> tuple[dt.date, int]:
     return (ref.as_of, ref.snapshot_id)
 
 
+def _thesis_key(thesis: Thesis) -> dt.datetime:
+    """Canonical thesis-history order: by when the view was recorded.
+
+    Equal ``recorded_at`` keeps insertion order (``insort`` is stable), which is
+    the SAME order storage projects on reload (``recorded_at`` then the row id),
+    so the active thesis is identical in memory and after a round-trip.
+    """
+    return thesis.recorded_at
+
+
 class Stock(BaseModel):
     """The aggregate root: a ticker's living coverage record.
 
@@ -118,6 +145,7 @@ class Stock(BaseModel):
     status: CoverageStatus = CoverageStatus.candidate
     snapshot_refs: list[SnapshotRef] = Field(default_factory=list)
     transition_history: list[StatusTransition] = Field(default_factory=list)
+    thesis_history: list[Thesis] = Field(default_factory=list)
     created_at: dt.datetime | None = None
     updated_at: dt.datetime | None = None
 
@@ -174,3 +202,61 @@ class Stock(BaseModel):
         timeline is kept ordered, "latest" is simply the last element.
         """
         return self.snapshot_refs[-1] if self.snapshot_refs else None
+
+    # --- thesis history ----------------------------------------------------
+    def record_thesis(
+        self,
+        *,
+        anchor_valuation_run_id: int,
+        anchor_snapshot_id: int,
+        anchor_value_per_share: float,
+        recorded_at: dt.datetime,
+        analyst_target: float | None = None,
+        override_rationale: str | None = None,
+        assumptions: list[ThesisAssumption] | None = None,
+        summary: str | None = None,
+        bull: str | None = None,
+        bear: str | None = None,
+    ) -> Thesis:
+        """Record a new thesis anchored to one of THIS stock's runs.
+
+        Enforces anchor ownership (HARD RULE 3): the anchored run's snapshot must
+        be on this stock's timeline, else ``CrossStockAnchorError`` is raised and
+        nothing is recorded. The frozen anchor facts (``anchor_value_per_share``,
+        ``anchor_snapshot_id``) are taken as given here; the repository asserts
+        them consistent with the cited run at persist time (ADR-015).
+
+        Takes primitives, not a ``ValuationRun``, so the aggregate stays decoupled
+        from the legacy ledger DTO. The new thesis is appended; "active" is the
+        latest by ``recorded_at`` — a projection, never a stored flag (HARD RULE
+        2). The history is kept ordered on insert, mirroring ``snapshot_refs``, so
+        an in-memory aggregate and a round-tripped one agree on the active thesis.
+        """
+        owned = {ref.snapshot_id for ref in self.snapshot_refs}
+        if anchor_snapshot_id not in owned:
+            raise CrossStockAnchorError(anchor_snapshot_id, self.isin)
+
+        thesis = Thesis(
+            recorded_at=recorded_at,
+            anchor_valuation_run_id=anchor_valuation_run_id,
+            anchor_snapshot_id=anchor_snapshot_id,
+            anchor_value_per_share=anchor_value_per_share,
+            analyst_target=analyst_target,
+            override_rationale=override_rationale,
+            assumptions=list(assumptions or []),
+            summary=summary,
+            bull=bull,
+            bear=bear,
+        )
+        insort(self.thesis_history, thesis, key=_thesis_key)
+        return thesis
+
+    @property
+    def active_thesis(self) -> Thesis | None:
+        """The current thesis — the latest by ``recorded_at`` — or ``None``.
+
+        A *query* over the append-only history (HARD RULE 2): "active" is computed
+        on read, never a stored mutable column. Because the history is kept
+        ordered, the active thesis is simply the last element.
+        """
+        return self.thesis_history[-1] if self.thesis_history else None
