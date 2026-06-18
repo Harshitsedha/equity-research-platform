@@ -28,6 +28,7 @@ from research_platform.domain.stock import (
 )
 from research_platform.storage import models as orm
 from research_platform.storage.db import make_session_factory
+from research_platform.storage.thesis_repository import load_thesis_history
 
 
 class SqlStockRepository:
@@ -140,6 +141,11 @@ class SqlStockRepository:
             for t in transition_rows
         ]
 
+        # Thesis history projected via the SHARED loader (one mapping definition,
+        # also used by SqlThesisRepository), ordered identically to the domain's
+        # insert order so ``active_thesis`` agrees in memory and after reload.
+        thesis_history = load_thesis_history(session, row.id)
+
         return Stock(
             id=row.uuid,
             isin=row.isin,
@@ -151,6 +157,7 @@ class SqlStockRepository:
             status=row.status,
             snapshot_refs=snapshot_refs,
             transition_history=transition_history,
+            thesis_history=thesis_history,
             created_at=row.created_at,
             updated_at=row.updated_at,
         )

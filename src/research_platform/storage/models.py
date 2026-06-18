@@ -13,9 +13,11 @@ import uuid as uuid_lib
 from sqlalchemy import (
     DateTime,
     Enum,
+    Float,
     ForeignKey,
     Integer,
     String,
+    Text,
     func,
     text,
 )
@@ -151,4 +153,76 @@ class StatusTransition(Base):
     reason: Mapped[str] = mapped_column(String(512))
 
     stock: Mapped[Stock] = relationship(back_populates="transitions")
+    # IMMUTABLE: enforced by DB trigger (see migrations) — no UPDATE/DELETE.
+
+
+class Thesis(Base):
+    """APPEND-ONLY recorded analyst view (Phase 3a, ADR-015).
+
+    Immutable: the same ``block_mutation()`` trigger the ledger tables use rejects
+    UPDATE/DELETE (installed in 0006). The anchor facts
+    (``anchor_value_per_share``, ``anchor_snapshot_id``) are FROZEN columns — the
+    fair value committed to at record time, not projected from the (versioned)
+    run on load. ``recorded_at`` carries the domain timestamp (not a server
+    default) so a persisted thesis re-reads identically to the in-memory one.
+    """
+
+    __tablename__ = "thesis"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    uuid: Mapped[uuid_lib.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        unique=True,
+        server_default=text("gen_random_uuid()"),
+    )
+    stock_id: Mapped[int] = mapped_column(ForeignKey("stock.id"), index=True)
+
+    # Provenance (required) + the frozen anchor facts (ADR-015).
+    anchor_valuation_run_id: Mapped[int] = mapped_column(
+        ForeignKey("valuation_run.id"), index=True
+    )
+    anchor_snapshot_id: Mapped[int] = mapped_column(ForeignKey("snapshot.id"))
+    anchor_value_per_share: Mapped[float] = mapped_column(Float)
+
+    # The analyst's adjusted view (optional) and why it differs from the model.
+    analyst_target: Mapped[float | None] = mapped_column(Float, nullable=True)
+    override_rationale: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    recorded_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True))
+
+    # Structural prose (pre-LLM).
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    bull: Mapped[str | None] = mapped_column(Text, nullable=True)
+    bear: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    assumptions: Mapped[list["ThesisAssumption"]] = relationship(
+        back_populates="thesis"
+    )
+    # IMMUTABLE: enforced by DB trigger (see migrations) — no UPDATE/DELETE.
+
+
+class ThesisAssumption(Base):
+    """APPEND-ONLY load-bearing premise of a thesis (Phase 3a, ADR-015).
+
+    One row per assumption, child of ``thesis`` — mirrors the
+    ``status_transition`` pattern (append-only child under an immutable parent).
+    ``metric_key`` is a flat key into a future ``Snapshot.inputs`` (3b resolves
+    it; 3a only records it). Immutable via the same trigger.
+    """
+
+    __tablename__ = "thesis_assumption"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    thesis_id: Mapped[int] = mapped_column(ForeignKey("thesis.id"), index=True)
+    name: Mapped[str] = mapped_column(String(128))
+    metric_key: Mapped[str] = mapped_column(String(256))
+    recorded_value: Mapped[float] = mapped_column(Float)
+    lower: Mapped[float | None] = mapped_column(Float, nullable=True)
+    upper: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    thesis: Mapped[Thesis] = relationship(back_populates="assumptions")
     # IMMUTABLE: enforced by DB trigger (see migrations) — no UPDATE/DELETE.
