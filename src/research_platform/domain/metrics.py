@@ -75,8 +75,12 @@ _METRIC_FNS: dict[str, Callable[[dict], float]] = {
     "revenue_growth": _revenue_growth,
 }
 
-#: All metric keys the harness can independently recompute.
-NUMERIC_METRIC_KEYS: tuple[str, ...] = tuple(METRIC_REQUIREMENTS)
+#: All metric keys the harness can independently recompute. Sourced from the
+#: dispatch table itself (``_METRIC_FNS`` — what ``compute_metric`` actually keys
+#: on) so it is the single source of "what is a derived metric": the 3b drift
+#: resolver imports THIS to decide derived-vs-raw, and the set can never drift
+#: from the functions that implement it.
+NUMERIC_METRIC_KEYS: tuple[str, ...] = tuple(_METRIC_FNS)
 
 
 def compute_metric(metric_key: str, inputs: dict, *, precision: int = PRECISION) -> float:
