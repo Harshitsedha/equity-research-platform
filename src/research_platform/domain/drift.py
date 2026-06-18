@@ -52,14 +52,14 @@ class DriftStatus(str, enum.Enum):
 class UnresolvedReason(str, enum.Enum):
     """Why an assumption could not be resolved — split at the resolver boundary.
 
-    ``compute_metric`` conflates UNKNOWN_KEY and MISSING_INPUT under one
+    ``compute_metric`` conflates KEY_ABSENT and MISSING_INPUT under one
     ``MetricError``; the resolver separates them by checking the derived set
     FIRST, so a failure on a *known* derived metric can only be an inputs problem.
     """
 
-    UNKNOWN_KEY = "UNKNOWN_KEY"      # not a derived metric and not a resolvable path
+    KEY_ABSENT = "KEY_ABSENT"        # non-derived key whose path is NOT present (found=False)
     MISSING_INPUT = "MISSING_INPUT"  # known derived metric, inputs can't compute it
-    PATH_ABSENT = "PATH_ABSENT"      # path present in structure but value is null
+    VALUE_ABSENT = "VALUE_ABSENT"    # path present but value is null / non-numeric
 
 
 class BandSide(str, enum.Enum):
@@ -102,8 +102,8 @@ def resolve_assumption(metric_key: str, inputs: dict) -> AssumptionResolution:
     Resolution outcomes, all without raising:
       * derived metric, computes        -> resolved value
       * derived metric, inputs can't     -> UNRESOLVED(MISSING_INPUT)
-      * raw key absent / not a path      -> UNRESOLVED(UNKNOWN_KEY)
-      * raw key present but null/non-num -> UNRESOLVED(PATH_ABSENT)
+      * raw key absent / not a path      -> UNRESOLVED(KEY_ABSENT)
+      * raw key present but null/non-num -> UNRESOLVED(VALUE_ABSENT)
       * raw key present, numeric         -> resolved value
     """
     if metric_key in NUMERIC_METRIC_KEYS:
@@ -118,16 +118,16 @@ def resolve_assumption(metric_key: str, inputs: dict) -> AssumptionResolution:
 
     found, value = resolve_path(inputs, metric_key)
     if not found:
-        return _unresolved(UnresolvedReason.UNKNOWN_KEY)
+        return _unresolved(UnresolvedReason.KEY_ABSENT)
     if value is None:
-        return _unresolved(UnresolvedReason.PATH_ABSENT)
+        return _unresolved(UnresolvedReason.VALUE_ABSENT)
     # Present, non-null: it must be a usable number to judge against a band. A
     # present-but-non-numeric leaf (e.g. a nested dict) is "no value to judge",
     # treated like present-but-null rather than raising.
     try:
         return AssumptionResolution(resolved=True, value=float(value))  # type: ignore[arg-type]
     except (TypeError, ValueError):
-        return _unresolved(UnresolvedReason.PATH_ABSENT)
+        return _unresolved(UnresolvedReason.VALUE_ABSENT)
 
 
 # ---------------------------------------------------------------------------

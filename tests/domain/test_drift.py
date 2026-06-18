@@ -61,32 +61,32 @@ def test_resolve_dotted_raw_path_returns_value() -> None:
     assert res.resolved and res.value == 100.0
 
 
-def test_resolve_unknown_key_is_unresolved_unknown_key() -> None:
+def test_resolve_absent_key_is_unresolved_key_absent() -> None:
     res = resolve_assumption("does_not_exist", INPUTS)
     assert not res.resolved
-    assert res.reason is UnresolvedReason.UNKNOWN_KEY
+    assert res.reason is UnresolvedReason.KEY_ABSENT
     assert res.value is None
 
 
 def test_resolve_known_derived_missing_input_is_missing_input() -> None:
     # roe needs net_income + equity; drop equity -> compute_metric raises, but the
-    # NAME is known, so the reason must be MISSING_INPUT, never UNKNOWN_KEY.
+    # NAME is known, so the reason must be MISSING_INPUT, never KEY_ABSENT.
     res = resolve_assumption("roe", {"net_income": 240.0})
     assert not res.resolved
     assert res.reason is UnresolvedReason.MISSING_INPUT
 
 
-def test_resolve_present_but_none_is_path_absent() -> None:
+def test_resolve_present_but_none_is_value_absent() -> None:
     res = resolve_assumption("null_field", INPUTS)
     assert not res.resolved
-    assert res.reason is UnresolvedReason.PATH_ABSENT
+    assert res.reason is UnresolvedReason.VALUE_ABSENT
 
 
-def test_resolve_present_but_non_numeric_is_path_absent() -> None:
+def test_resolve_present_but_non_numeric_is_value_absent() -> None:
     # "segments" resolves to a dict — present, but no value to judge.
     res = resolve_assumption("segments", INPUTS)
     assert not res.resolved
-    assert res.reason is UnresolvedReason.PATH_ABSENT
+    assert res.reason is UnresolvedReason.VALUE_ABSENT
 
 
 def test_derived_wins_precedence() -> None:
@@ -207,7 +207,7 @@ def test_projection_assembles_all_fields_when_crossed() -> None:
 def test_unresolved_projection_carries_reason_and_no_band_fields() -> None:
     d = _drift_of(_assume("gone", 1.0, _both()), INPUTS)
     assert d.status is DriftStatus.UNRESOLVED
-    assert d.unresolved_reason is UnresolvedReason.UNKNOWN_KEY
+    assert d.unresolved_reason is UnresolvedReason.KEY_ABSENT
     assert d.resolved_value is None
     assert d.crossed_side is None
     assert d.breach_magnitude is None
