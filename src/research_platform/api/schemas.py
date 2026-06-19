@@ -33,6 +33,14 @@ from research_platform.domain.drift import (
     ThesisDriftProjection,
     UnresolvedReason,
 )
+from research_platform.domain.significance import (
+    AssumptionSignificance,
+    Coverage,
+    SignificanceThresholds,
+    Staleness,
+    ThesisSignificance,
+    Verdict,
+)
 from research_platform.domain.models import Snapshot
 from research_platform.domain.stock import (
     CoverageStatus,
@@ -287,6 +295,108 @@ class ThesisDriftBody(BaseModel):
         )
 
 
+# ===========================================================================
+# Significance (Phase 3c, ADR-016) — the VERDICT layer, additive over 3b.
+#
+# Every field below is purely ADDITIVE: it sits in a new ``significance`` object
+# beside the unchanged ``drift`` body, so a client that ignores it is unaffected.
+# Significance is still a computed projection (never stored): recomputed per call,
+# the response keeps Cache-Control: no-store. The thresholds echo on the wire with
+# their uncalibrated-placeholder provenance, so a verdict is reproducible from
+# (thesis + snapshot + clock + this echoed threshold-set).
+# ===========================================================================
+
+
+class SignificanceThresholdsResponse(BaseModel):
+    """The band edges + their provenance, echoed so a verdict is reproducible."""
+
+    warn_fraction: float
+    breach_edge: float
+    stale_quarters: int
+    version: str
+    calibrated: bool
+
+    @classmethod
+    def from_thresholds(
+        cls, t: SignificanceThresholds
+    ) -> SignificanceThresholdsResponse:
+        return cls(
+            warn_fraction=t.warn_fraction,
+            breach_edge=t.breach_edge,
+            stale_quarters=t.stale_quarters,
+            version=t.version,
+            calibrated=t.calibrated,
+        )
+
+
+class StalenessResponse(BaseModel):
+    """Thesis age: raw ``age_days`` + the judged ``quarters_elapsed`` + a verdict."""
+
+    age_days: int
+    quarters_elapsed: int
+    verdict: Verdict
+
+    @classmethod
+    def from_staleness(cls, s: Staleness) -> StalenessResponse:
+        return cls(
+            age_days=s.age_days,
+            quarters_elapsed=s.quarters_elapsed,
+            verdict=s.verdict,
+        )
+
+
+class AssumptionSignificanceResponse(BaseModel):
+    """One premise's verdict. ``UNKNOWN`` (unresolved) carries its reason verbatim."""
+
+    name: str
+    metric_key: str
+    status: DriftStatus
+    verdict: Verdict
+    normalized_breach: float | None
+    unresolved_reason: UnresolvedReason | None
+
+    @classmethod
+    def from_significance(
+        cls, a: AssumptionSignificance
+    ) -> AssumptionSignificanceResponse:
+        return cls(
+            name=a.name,
+            metric_key=a.metric_key,
+            status=a.status,
+            verdict=a.verdict,
+            normalized_breach=a.normalized_breach,
+            unresolved_reason=a.unresolved_reason,
+        )
+
+
+class ThesisSignificanceResponse(BaseModel):
+    """The composed verdict. ``overall`` is the headline (may be UNKNOWN); ``severity``
+    is the HOLDS-on-resolved value; ``coverage`` is the orthogonal UNKNOWN flag."""
+
+    overall: Verdict
+    severity: Verdict
+    coverage: Coverage
+    re_thesis: bool
+    staleness: StalenessResponse
+    assumptions: list[AssumptionSignificanceResponse]
+    thresholds: SignificanceThresholdsResponse
+
+    @classmethod
+    def from_significance(cls, s: ThesisSignificance) -> ThesisSignificanceResponse:
+        return cls(
+            overall=s.overall,
+            severity=s.severity,
+            coverage=s.coverage,
+            re_thesis=s.re_thesis,
+            staleness=StalenessResponse.from_staleness(s.staleness),
+            assumptions=[
+                AssumptionSignificanceResponse.from_significance(a)
+                for a in s.assumptions
+            ],
+            thresholds=SignificanceThresholdsResponse.from_thresholds(s.thresholds),
+        )
+
+
 class ThesisDriftResponse(BaseModel):
     """Envelope identifying BOTH ends of the drift interval + the projection.
 
@@ -296,6 +406,10 @@ class ThesisDriftResponse(BaseModel):
     ``thesis_present=false`` (no thesis at all) is distinct from a present thesis
     with ``current_snapshot=null`` (nothing to resolve against yet); ``drift`` is
     non-null only when a current snapshot was resolved.
+
+    ``significance`` (3c, additive) is non-null exactly when ``drift`` is — it is
+    the verdict layer over the same projection. A client ignoring it sees the
+    unchanged 3b contract.
     """
 
     isin: str
@@ -305,6 +419,7 @@ class ThesisDriftResponse(BaseModel):
     anchor_snapshot: SnapshotRefResponse | None
     current_snapshot: SnapshotRefResponse | None
     drift: ThesisDriftBody | None
+    significance: ThesisSignificanceResponse | None = None
 
     @classmethod
     def no_thesis(cls, isin: str) -> ThesisDriftResponse:
@@ -317,6 +432,7 @@ class ThesisDriftResponse(BaseModel):
             anchor_snapshot=None,
             current_snapshot=None,
             drift=None,
+            significance=None,
         )
 
     @classmethod
@@ -336,6 +452,7 @@ class ThesisDriftResponse(BaseModel):
             ),
             current_snapshot=None,
             drift=None,
+            significance=None,
         )
 
     @classmethod
@@ -346,6 +463,7 @@ class ThesisDriftResponse(BaseModel):
         anchor_snapshot: SnapshotRef | None,
         current_snapshot: SnapshotRef,
         projection: ThesisDriftProjection,
+        significance: ThesisSignificance,
     ) -> ThesisDriftResponse:
         return cls(
             isin=isin,
@@ -359,4 +477,5 @@ class ThesisDriftResponse(BaseModel):
             ),
             current_snapshot=SnapshotRefResponse.from_ref(current_snapshot),
             drift=ThesisDriftBody.from_projection(projection),
+            significance=ThesisSignificanceResponse.from_significance(significance),
         )

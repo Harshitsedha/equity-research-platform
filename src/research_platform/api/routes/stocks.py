@@ -7,6 +7,8 @@ append-only ledger leaves the domain already references by int).
 
 from __future__ import annotations
 
+import datetime as dt
+
 from fastapi import APIRouter, Depends, HTTPException, Response
 
 from research_platform.api.dependencies import (
@@ -20,6 +22,10 @@ from research_platform.api.schemas import (
     ThesisDriftResponse,
 )
 from research_platform.domain.drift import compute_thesis_drift
+from research_platform.domain.significance import (
+    SignificanceThresholds,
+    compute_significance,
+)
 from research_platform.domain.ports.repository import RepositoryPort
 from research_platform.domain.ports.stock_repository import StockRepository
 from research_platform.domain.stock import CoverageStatus
@@ -133,6 +139,15 @@ def get_thesis_drift(
         return ThesisDriftResponse.no_current_snapshot(isin, thesis, anchor_ref)
 
     projection = compute_thesis_drift(thesis, snapshot.inputs)
+    # Significance is a projection too (ADR-016): recomputed here, never stored, so
+    # it shares the no-store guarantee above. The clock is INJECTED at the boundary
+    # (request-time now) to keep the domain pure; thresholds are the uncalibrated
+    # placeholder defaults, echoed on the verdict for reproducibility.
+    significance = compute_significance(
+        projection,
+        as_of=dt.datetime.now(dt.timezone.utc),
+        thresholds=SignificanceThresholds(),
+    )
     return ThesisDriftResponse.from_projection(
-        isin, thesis, anchor_ref, current_ref, projection
+        isin, thesis, anchor_ref, current_ref, projection, significance
     )
