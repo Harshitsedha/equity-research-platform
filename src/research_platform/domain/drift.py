@@ -27,6 +27,7 @@ the existing verification paths — there is no parallel resolver.
 
 from __future__ import annotations
 
+import datetime as dt
 import enum
 import uuid
 
@@ -224,11 +225,17 @@ class ModelJudgmentGap(BaseModel):
 
 
 class ThesisDriftProjection(BaseModel):
-    """The full computed drift view for one thesis. Never stored (ADR-015)."""
+    """The full computed drift view for one thesis. Never stored (ADR-015).
+
+    ``thesis_recorded_at`` is echoed off the frozen thesis (3a column) so a
+    downstream pure consumer can judge staleness (Phase 3c significance) without a
+    second load — it is the *recorded* fact, not a clock read here.
+    """
 
     model_config = ConfigDict(frozen=True)
 
     thesis_id: uuid.UUID
+    thesis_recorded_at: dt.datetime
     assumption_drifts: list[AssumptionDrift]
     model_judgment_gap: ModelJudgmentGap
 
@@ -285,6 +292,7 @@ def compute_thesis_drift(
     """
     return ThesisDriftProjection(
         thesis_id=thesis.id,
+        thesis_recorded_at=thesis.recorded_at,
         assumption_drifts=[
             _assumption_drift(a, current_snapshot_inputs) for a in thesis.assumptions
         ],

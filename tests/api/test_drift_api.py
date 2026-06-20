@@ -250,6 +250,65 @@ def test_empty_inputs_yields_full_drift_all_unresolved() -> None:
     assert all(d["status"] == "UNRESOLVED" for d in drifts)
 
 
+# --- Phase 3c: the additive significance verdict on the wire ----------------
+def test_significance_present_and_additive(full_body) -> None:
+    # The 3b drift body is unchanged; significance is a NEW sibling object.
+    assert full_body["drift"] is not None
+    sig = full_body["significance"]
+    assert sig is not None
+    # Headline + composition fields.
+    assert sig["overall"] in {"HOLDS", "REVIEW", "RE_THESIS", "UNKNOWN"}
+    assert sig["severity"] in {"HOLDS", "REVIEW", "RE_THESIS"}
+    assert sig["coverage"] in {"COMPLETE", "PARTIAL"}
+    assert isinstance(sig["re_thesis"], bool)
+    # Per-assumption verdicts align 1:1 with the drift rows.
+    assert {a["name"] for a in sig["assumptions"]} == {
+        d["name"] for d in full_body["drift"]["assumption_drifts"]
+    }
+
+
+def test_significance_partial_coverage_and_unresolved_verdicts(full_body) -> None:
+    sig = full_body["significance"]
+    by = {a["name"]: a for a in sig["assumptions"]}
+    # roe/missing/null are UNRESOLVED in this fixture -> UNKNOWN, never a clean HOLDS.
+    for nm in ("roe", "missing", "null"):
+        assert by[nm]["verdict"] == "UNKNOWN"
+    assert sig["coverage"] == "PARTIAL"  # the orthogonal UNKNOWN flag
+    # rev is CROSSED below a two-sided band [2000,3000] -> capped at REVIEW.
+    assert by["rev"]["verdict"] == "REVIEW"
+
+
+def test_significance_thresholds_echo_uncalibrated_provenance(full_body) -> None:
+    thr = full_body["significance"]["thresholds"]
+    assert thr["calibrated"] is False
+    assert thr["version"] == "uncalibrated-placeholder-v0"
+    assert {"warn_fraction", "breach_edge", "stale_quarters"} <= set(thr)
+
+
+def test_significance_staleness_block_present(full_body) -> None:
+    st = full_body["significance"]["staleness"]
+    assert isinstance(st["age_days"], int) and st["age_days"] >= 0
+    assert isinstance(st["quarters_elapsed"], int) and st["quarters_elapsed"] >= 0
+    assert st["verdict"] in {"HOLDS", "REVIEW"}
+
+
+def test_significance_still_no_store(full_body) -> None:  # provenance: recomputed, never cached
+    stock = _stock_with_thesis(analyst_target=125.0)
+    client = _client(stock, {CURRENT_SNAP_ID: _snapshot(CURRENT_SNAP_ID, CURRENT_INPUTS)})
+    resp = client.get(f"/stocks/{ISIN}/drift")
+    assert resp.headers["cache-control"] == "no-store"
+
+
+def test_significance_null_when_drift_null() -> None:
+    # No active thesis -> drift null -> significance null (both absent, in lockstep).
+    stock = Stock(isin=ISIN, ticker="DFT", name="Drift Co")
+    stock.add_snapshot_ref(CURRENT_SNAP_ID, dt.date(2026, 3, 31))
+    body = _client(stock, {CURRENT_SNAP_ID: _snapshot(CURRENT_SNAP_ID, CURRENT_INPUTS)}) \
+        .get(f"/stocks/{ISIN}/drift").json()
+    assert body["drift"] is None
+    assert body["significance"] is None
+
+
 # --- HARD RULE 2: the new route is GET-only ---------------------------------
 def test_drift_route_is_get_only() -> None:
     paths = create_app().openapi()["paths"]
